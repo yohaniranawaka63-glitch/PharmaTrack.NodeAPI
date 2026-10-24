@@ -1,0 +1,171 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model Medicine {
+  MedicineId    Int             @id @default(autoincrement())
+  Name          String          @db.VarChar(150)
+  GenericName   String?         @db.VarChar(150)
+  Category      String?         @db.VarChar(100)
+  Unit          String?         @db.VarChar(50)
+  Strength      String?         @db.VarChar(30)
+  IsActive      Boolean         @default(false)
+  MedicineBatch MedicineBatch[]
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model MedicineBatch {
+  BatchId           Int                @id @default(autoincrement())
+  MedicineId        Int
+  SupplierId        Int?
+  BatchName         String             @db.VarChar(50)
+  ManufacturingDate DateTime?          @db.Date
+  ExpiryDate        DateTime?          @db.Date
+  PurchasePrice     Decimal            @db.Decimal(10, 2)
+  SellingPrice      Decimal            @db.Decimal(10, 2)
+  Quantity          Int
+  IsActive          Boolean            @default(false)
+  Supplier          Supplier?          @relation(fields: [SupplierId], references: [SupplierId], onUpdate: NoAction, map: "FK_MedicineBatch_Supplier_SupplierId")
+  Medicine          Medicine           @relation(fields: [MedicineId], references: [MedicineId], onDelete: NoAction, onUpdate: NoAction)
+  SaleItem          SaleItem[]
+  StockTransaction  StockTransaction[]
+
+  @@index([SupplierId], map: "IX_MedicineBatch_SupplierId")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model OtherItem {
+  OtherItemId       Int              @id(map: "PK_OtherItem") @default(autoincrement())
+  ItemName          String
+  Category          String?
+  Unit              String?
+  PurchasePrice     Decimal          @db.Decimal(10, 2)
+  SellingPrice      Decimal          @db.Decimal(10, 2)
+  Quantity          Int
+  ReorderLevel      Int
+  Status            Boolean
+  ProductCategoryId Int?
+  ProductCategory   ProductCategory? @relation(fields: [ProductCategoryId], references: [CategoryId], onDelete: NoAction, onUpdate: NoAction, map: "FK_OtherItem_ProductCategory_ProductCategoryId")
+
+  @@index([ProductCategoryId], map: "IX_OtherItem_ProductCategoryId")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model PasswordResetToken {
+  PasswordResetTokenId Int       @id(map: "PK_PasswordResetToken") @default(autoincrement())
+  UserId               Int
+  TokenHash            String    @db.VarChar(64)
+  ExpiresAt            DateTime  @db.Timestamptz(6)
+  CreatedAt            DateTime  @db.Timestamptz(6)
+  UsedAt               DateTime? @db.Timestamptz(6)
+  User                 User      @relation(fields: [UserId], references: [UserId], onDelete: Cascade, onUpdate: NoAction, map: "FK_PasswordResetToken_User_UserId")
+
+  @@index([UserId], map: "IX_PasswordResetToken_UserId")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model ProductCategory {
+  CategoryId   Int         @id(map: "PK_ProductCategory") @default(autoincrement())
+  CategoryName String      @db.VarChar(100)
+  Status       Boolean
+  OtherItem    OtherItem[]
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model Role {
+  RoleId   Int    @id @default(autoincrement())
+  RoleName String @db.VarChar(50)
+  User     User[]
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model Sale {
+  SaleId        Int        @id @default(autoincrement())
+  UserId        Int
+  SaleDate      DateTime   @db.Date
+  TotalAmount   Decimal    @db.Decimal(10, 2)
+  PaymentMethod String     @db.VarChar(30)
+  User          User       @relation(fields: [UserId], references: [UserId], onDelete: NoAction, onUpdate: NoAction)
+  SaleItem      SaleItem[]
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model SaleItem {
+  SaleItemId          Int            @id @default(autoincrement())
+  SaleId              Int
+  BatchId             Int?
+  Quantity            Int
+  UnitPrice           Decimal        @db.Decimal(10, 2)
+  SubTotal            Decimal        @db.Decimal(10, 2)
+  OtherItemId         Int?
+  PurchasePriceAtSale Decimal?       @db.Decimal
+  MedicineBatch       MedicineBatch? @relation(fields: [BatchId], references: [BatchId], onDelete: NoAction, onUpdate: NoAction)
+  Sale                Sale           @relation(fields: [SaleId], references: [SaleId], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model StockTransaction {
+  TransactionId   Int           @id @default(autoincrement())
+  BatchId         Int
+  UserId          Int
+  TransactionType String        @db.VarChar(30)
+  Quantity        Int
+  TransactionDate DateTime      @db.Timestamp(6)
+  Note            String?       @db.VarChar(255)
+  MedicineBatch   MedicineBatch @relation(fields: [BatchId], references: [BatchId], onDelete: NoAction, onUpdate: NoAction)
+  User            User          @relation(fields: [UserId], references: [UserId], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model Supplier {
+  SupplierId    Int             @id @default(autoincrement())
+  SupplierName  String          @db.VarChar(150)
+  ContactNumber String?         @db.VarChar(20)
+  Email         String?         @db.VarChar(100)
+  Address       String?         @db.VarChar(255)
+  MedicineBatch MedicineBatch[]
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model SupportRequests {
+  RequestId   Int       @id(map: "PK_SupportRequests") @default(autoincrement())
+  UserId      Int
+  RequestType String    @db.VarChar(50)
+  Message     String
+  Status      String    @db.VarChar(30)
+  CreatedAt   DateTime  @db.Timestamptz(6)
+  ResolvedAt  DateTime? @db.Timestamptz(6)
+  User        User      @relation(fields: [UserId], references: [UserId], onDelete: Cascade, onUpdate: NoAction, map: "FK_SupportRequests_User_UserId")
+
+  @@index([UserId], map: "IX_SupportRequests_UserId")
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model User {
+  UserId             Int                  @id @default(autoincrement())
+  Name               String               @db.VarChar(100)
+  UserName           String               @unique @db.VarChar(50)
+  Password           String               @db.VarChar(255)
+  RoleId             Int
+  Status             Boolean
+  Email              String?
+  PasswordResetToken PasswordResetToken[]
+  Sale               Sale[]
+  StockTransaction   StockTransaction[]
+  SupportRequests    SupportRequests[]
+  Role               Role                 @relation(fields: [RoleId], references: [RoleId], onDelete: NoAction, onUpdate: NoAction)
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model EFMigrationsHistory {
+  MigrationId    String @id(map: "PK___EFMigrationsHistory") @db.VarChar(150)
+  ProductVersion String @db.VarChar(32)
+
+  @@map("__EFMigrationsHistory")
+}
