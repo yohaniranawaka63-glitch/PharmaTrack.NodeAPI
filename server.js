@@ -476,6 +476,96 @@ app.post("/api/Medicine", authenticateToken, async (req, res) => {
   }
 });
 
+app.put("/api/Medicine/:id", authenticateToken, async (req, res) => {
+  try {
+    const medicineId = Number(req.params.id);
+
+    if (!Number.isInteger(medicineId) || medicineId <= 0) {
+      return res.status(400).json({ message: "Invalid medicine ID." });
+    }
+
+    const body = req.body || {};
+
+    const existing = await prisma.medicine.findUnique({
+      where: { MedicineId: medicineId },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ message: "Medicine not found." });
+    }
+
+    const name = body.name ?? body.Name;
+    const genericName = body.genericName ?? body.GenericName;
+    const category = body.category ?? body.Category;
+    const unit = body.unit ?? body.Unit;
+    const strength = body.strength ?? body.Strength;
+
+    if (
+      typeof name !== "string" || !name.trim() ||
+      typeof genericName !== "string" || !genericName.trim() ||
+      typeof category !== "string" || !category.trim() ||
+      typeof unit !== "string" || !unit.trim() ||
+      typeof strength !== "string" || !strength.trim()
+    ) {
+      return res.status(400).json({
+        message: "All medicine fields are required.",
+      });
+    }
+
+    const medicine = await prisma.medicine.update({
+      where: { MedicineId: medicineId },
+      data: {
+        Name: name.trim(),
+        GenericName: genericName.trim(),
+        Category: category.trim(),
+        Unit: unit.trim(),
+        Strength: strength.trim(),
+      },
+    });
+
+    return res.json(medicine);
+  } catch (error) {
+    console.error("Failed to update medicine:", error.message);
+    return res.status(500).json({
+      message: "Failed to update medicine.",
+    });
+  }
+});
+
+app.delete("/api/Medicine/:id", authenticateToken, async (req, res) => {
+  try {
+    const medicineId = Number(req.params.id);
+
+    if (!Number.isInteger(medicineId) || medicineId <= 0) {
+      return res.status(400).json({ message: "Invalid medicine ID." });
+    }
+
+    const existing = await prisma.medicine.findUnique({
+      where: { MedicineId: medicineId },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ message: "Medicine not found." });
+    }
+
+    if (!existing.IsActive) {
+      return res.json({ message: "Medicine is already inactive." });
+    }
+
+    await prisma.medicine.update({
+      where: { MedicineId: medicineId },
+      data: { IsActive: false },
+    });
+
+    return res.json({ message: "Medicine deactivated successfully." });
+  } catch (error) {
+    console.error("Failed to deactivate medicine:", error.message);
+    return res.status(500).json({
+      message: "Failed to deactivate medicine.",
+    });
+  }
+});
+
 app.get("/api/MedicineBatch", authenticateToken, async (req, res) => {
 
   try {
