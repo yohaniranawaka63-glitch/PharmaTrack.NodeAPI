@@ -439,7 +439,42 @@ app.get("/api/Medicine", authenticateToken, async (req, res) => {
   }
 });
 
+app.post("/api/Medicine", authenticateToken, async (req, res) => {
+  try {
+    const body = req.body || {};
 
+    const name = typeof body.Name === "string"
+      ? body.Name.trim()
+      : typeof body.name === "string"
+        ? body.name.trim()
+        : "";
+
+    if (!name) {
+      return res.status(400).json({
+        message: "Medicine name is required.",
+      });
+    }
+
+    const medicine = await prisma.medicine.create({
+      data: {
+        Name: name,
+        GenericName: body.GenericName ?? body.genericName ?? null,
+        Category: body.Category ?? body.category ?? null,
+        Unit: body.Unit ?? body.unit ?? null,
+        Strength: body.Strength ?? body.strength ?? null,
+        IsActive: true,
+      },
+    });
+
+    return res.status(201).json(medicine);
+  } catch (error) {
+    console.error("Failed to create medicine:", error.message);
+
+    return res.status(500).json({
+      message: "Failed to create medicine.",
+    });
+  }
+});
 
 app.get("/api/MedicineBatch", authenticateToken, async (req, res) => {
 
