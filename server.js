@@ -1,11 +1,21 @@
 
 require("dotenv").config();
 
+console.log("SMTP CHECK:", {
+  host: process.env.SMTP_HOST,
+  port: process.env.SMTP_PORT,
+  userExists: Boolean(process.env.SMTP_USER),
+  passwordExists: Boolean(process.env.SMTP_PASS),
+  fromExists: Boolean(process.env.SMTP_FROM),
+  passwordLength: process.env.SMTP_PASS?.length,
+});
+
 const express = require("express");
 const cors = require("cors");
 const { PrismaClient, Prisma } = require("@prisma/client");
 const crypto = require("crypto");
 const jwt = require("jsonwebtoken");
+const nodemailer = require("nodemailer");
 
 const app = express();
 const prisma = new PrismaClient();
@@ -428,6 +438,7 @@ app.get("/api/Medicine", authenticateToken, async (req, res) => {
         Name: "asc",
       },
     });
+    console.log("Medicine records from database:", medicines.length);
 
     res.json(medicines);
   } catch (error) {
@@ -565,11 +576,12 @@ app.delete("/api/Medicine/:id", authenticateToken, async (req, res) => {
     });
   }
 });
-
 app.get("/api/MedicineBatch", authenticateToken, async (req, res) => {
-
   try {
     const batches = await prisma.medicineBatch.findMany({
+      where: {
+        IsActive: true,
+      },
       include: {
         Medicine: true,
         Supplier: true,
@@ -582,17 +594,415 @@ app.get("/api/MedicineBatch", authenticateToken, async (req, res) => {
     res.json(batches);
   } catch (error) {
     console.error("Failed to load medicine batches:", error.message);
-
     res.status(500).json({
       message: "Failed to load medicine batches",
     });
   }
 });
+// POST: Add a new medicine batch
+app.post("/api/MedicineBatch", authenticateToken, async (req, res) => {
+  try {
+    const {
+      medicineId,
+      supplierId,
+      batchName,
+      manufacturingDate,
+      expiryDate,
+      purchasePrice,
+      sellingPrice,
+      quantity,
+    } = req.body;
+
+    if (!medicineId || !supplierId || !batchName?.trim()) {
+      return res.status(400).json({
+        message: "Medicine, supplier and batch name are required.",
+      });
+    }
+
+    if (
+      !manufacturingDate ||
+      !expiryDate ||
+      purchasePrice == null ||
+      sellingPrice == null ||
+      quantity == null
+    ) {
+      return res.status(400).json({
+        message: "Please provide all batch details.",
+      });
+    }
+
+    const mfgDate = new Date(manufacturingDate);
+    const expDate = new Date(expiryDate);
+    const purchase = Number(purchasePrice);
+    const selling = Number(sellingPrice);
+    const qty = Number(quantity);
+
+    if (
+      Number.isNaN(mfgDate.getTime()) ||
+      Number.isNaN(expDate.getTime()) ||
+      !Number.isFinite(purchase) ||
+      !Number.isFinite(selling) ||
+      !Number.isInteger(qty) ||
+      qty < 0 ||
+      purchase < 0 ||
+      selling < 0
+    ) {
+      return res.status(400).json({
+        message: "Please enter valid batch details.",
+      });
+    }
+
+    const batch = await prisma.medicineBatch.create({
+      data: {
+        MedicineId: Number(medicineId),
+        SupplierId: Number(supplierId),
+        BatchName: batchName.trim(),
+        ManufacturingDate: mfgDate,
+        ExpiryDate: expDate,
+        PurchasePrice: purchase,
+        SellingPrice: selling,
+        Quantity: qty,
+        IsActive: true,
+      },
+      include: {
+        Medicine: true,
+        Supplier: true,
+      },
+    });
+
+    return res.status(201).json(batch);
+  } catch (error) {
+    console.error("Failed to create medicine batch:", error);
+
+    return res.status(500).json({
+      message: "Failed to create medicine batch.",
+    });
+  }
+});
 
 
+// PUT: Edit an existing medicine batch
+app.put("/api/MedicineBatch/:id", authenticateToken, async (req, res) => {
+  try {
+    const batchId = Number(req.params.id);
 
+    if (!Number.isInteger(batchId) || batchId <= 0) {
+      return res.status(400).json({
+        message: "Invalid batch ID.",
+      });
+    }
+
+    const existingBatch = await prisma.medicineBatch.findUnique({
+      where: { BatchId: batchId },
+    });
+
+    if (!existingBatch) {
+      return res.status(404).json({
+        message: "Medicine batch not found.",
+      });
+    }
+
+    const {
+      medicineId,
+      supplierId,
+      batchName,
+      manufacturingDate,
+      expiryDate,
+      purchasePrice,
+      sellingPrice,
+      quantity,
+    } = req.body;
+
+    const data = {};
+
+    if (medicineId != null) data.MedicineId = Number(medicineId);
+    if (supplierId != null) data.SupplierId = Number(supplierId);
+
+    if (batchName != null) {
+      if (!String(batchName).trim()) {
+        return res.status(400).json({
+          message: "Batch name is required.",
+        });
+      }
+      data.BatchName = String(batchName).trim();
+    }
+
+    if (manufacturingDate != null) {
+      const date = new Date(manufacturingDate);
+      if (Number.isNaN(date.getTime())) {
+        return res.status(400).json({
+          message: "Invalid manufacturing date.",
+        });
+      }
+      data.ManufacturingDate = date;
+    }
+
+    if (expiryDate != null) {
+      const date = new Date(expiryDate);
+      if (Number.isNaN(date.getTime())) {
+        return res.status(400).json({
+          message: "Invalid expiry date.",
+        });
+      }
+      data.ExpiryDate = date;
+    }
+
+    if (purchasePrice != null) {
+      const price = Number(purchasePrice);
+      if (!Number.isFinite(price) || price < 0) {
+        return res.status(400).json({
+          message: "Invalid purchase price.",
+        });
+      }
+      data.PurchasePrice = price;
+    }
+
+    if (sellingPrice != null) {
+      const price = Number(sellingPrice);
+      if (!Number.isFinite(price) || price < 0) {
+        return res.status(400).json({
+          message: "Invalid selling price.",
+        });
+      }
+      data.SellingPrice = price;
+    }
+
+    // Quantity changes here should be reserved for editing batch details.
+    // Use the AddStock endpoint for additional stock.
+    if (quantity != null) {
+      const qty = Number(quantity);
+      if (!Number.isInteger(qty) || qty < 0) {
+        return res.status(400).json({
+          message: "Quantity must be a non-negative whole number.",
+        });
+      }
+      data.Quantity = qty;
+    }
+
+    const updatedBatch = await prisma.medicineBatch.update({
+      where: { BatchId: batchId },
+      data,
+      include: {
+        Medicine: true,
+        Supplier: true,
+      },
+    });
+
+    return res.json(updatedBatch);
+  } catch (error) {
+    console.error("Failed to update medicine batch:", error);
+
+    return res.status(500).json({
+      message: "Failed to update medicine batch.",
+    });
+  }
+});
+
+
+// DELETE: Safely deactivate a medicine batch
+app.delete(
+  "/api/MedicineBatch/:id",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const batchId = Number(req.params.id);
+
+      if (!Number.isInteger(batchId) || batchId <= 0) {
+        return res.status(400).json({
+          message: "Invalid batch ID.",
+        });
+      }
+
+      const batch = await prisma.medicineBatch.findUnique({
+        where: { BatchId: batchId },
+      });
+
+      if (!batch) {
+        return res.status(404).json({
+          message: "Medicine batch not found.",
+        });
+      }
+
+      // Soft delete: preserve sales and stock transaction history.
+      const updatedBatch = await prisma.medicineBatch.update({
+        where: { BatchId: batchId },
+        data: {
+          IsActive: false,
+        },
+      });
+
+      return res.json({
+        message: "Medicine batch deactivated successfully.",
+        batch: updatedBatch,
+      });
+    } catch (error) {
+      console.error("Failed to deactivate medicine batch:", error);
+
+      return res.status(500).json({
+        message: "Failed to deactivate medicine batch.",
+      });
+    }
+  }
+);
+
+ // GET: Medicine expiry alerts
+app.get("/api/MedicineBatch/ExpiryAlerts", authenticateToken, async (req, res) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const next30Days = new Date(today);
+    next30Days.setDate(next30Days.getDate() + 30);
+
+    const batches = await prisma.medicineBatch.findMany({
+      where: {
+        IsActive: true,
+        Quantity: {
+          gt: 0,
+        },
+      },
+      include: {
+        Medicine: true,
+        Supplier: true,
+      },
+      orderBy: {
+        ExpiryDate: "asc",
+      },
+    });
+
+    const expired = batches.filter((batch) => {
+      const expiryDate = new Date(batch.ExpiryDate);
+      expiryDate.setHours(0, 0, 0, 0);
+
+      return expiryDate < today;
+    });
+
+    const expiringSoon = batches.filter((batch) => {
+      const expiryDate = new Date(batch.ExpiryDate);
+      expiryDate.setHours(0, 0, 0, 0);
+
+      return expiryDate >= today && expiryDate <= next30Days;
+    });
+
+    return res.json({
+      expiredCount: expired.length,
+      expiringSoonCount: expiringSoon.length,
+      expired,
+      expiringSoon,
+    });
+  } catch (error) {
+    console.error("Failed to load expiry alerts:", error);
+
+    return res.status(500).json({
+      message: "Failed to load expiry alerts.",
+    });
+  }
+});
+
+
+app.post(
+  "/api/MedicineBatch/:id/AddStock",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const batchId = Number(req.params.id);
+      const quantityToAdd = Number(req.body?.quantity);
+      const note =
+        typeof req.body?.note === "string"
+          ? req.body.note.trim()
+          : null;
+
+      const userId = Number(req.user?.userId);
+
+      if (!Number.isInteger(batchId) || batchId <= 0) {
+        return res.status(400).json({ message: "Invalid batch ID." });
+      }
+
+      if (!Number.isInteger(quantityToAdd) || quantityToAdd <= 0) {
+        return res.status(400).json({
+          message: "Quantity to add must be a positive whole number.",
+        });
+      }
+
+      if (!Number.isInteger(userId) || userId <= 0) {
+        return res.status(401).json({
+          message: "Logged-in user ID is missing. Please log in again.",
+        });
+      }
+
+      if (note && note.length > 255) {
+        return res.status(400).json({
+          message: "Note cannot exceed 255 characters.",
+        });
+      }
+
+      const result = await prisma.$transaction(async (tx) => {
+        const batch = await tx.medicineBatch.findUnique({
+          where: { BatchId: batchId },
+        });
+
+        if (!batch) {
+          const error = new Error("Medicine batch not found.");
+          error.statusCode = 404;
+          throw error;
+        }
+
+        if (!batch.IsActive) {
+          const error = new Error(
+            "Cannot add stock to an inactive medicine batch."
+          );
+          error.statusCode = 400;
+          throw error;
+        }
+
+        const updatedBatch = await tx.medicineBatch.update({
+          where: { BatchId: batchId },
+          data: {
+            Quantity: { increment: quantityToAdd },
+          },
+          include: {
+            Medicine: true,
+            Supplier: true,
+          },
+        });
+
+        const stockTransaction = await tx.stockTransaction.create({
+          data: {
+            BatchId: batchId,
+            UserId: userId,
+            TransactionType: "StockIn",
+            Quantity: quantityToAdd,
+            TransactionDate: new Date(),
+            Note: note || "Additional stock received",
+          },
+        });
+
+        return { updatedBatch, stockTransaction };
+      });
+
+      return res.json({
+        message: "Stock added successfully.",
+        batch: result.updatedBatch,
+        transaction: result.stockTransaction,
+      });
+    } catch (error) {
+      if (error.statusCode) {
+        return res.status(error.statusCode).json({
+          message: error.message,
+        });
+      }
+
+      console.error("Failed to add stock:", error);
+      return res.status(500).json({
+        message: "Failed to add stock.",
+      });
+    }
+  }
+);
+
+
+/* GET SUPPLIERS */
 app.get("/api/Supplier", authenticateToken, async (req, res) => {
-
   try {
     const suppliers = await prisma.supplier.findMany({
       orderBy: {
@@ -602,14 +1012,201 @@ app.get("/api/Supplier", authenticateToken, async (req, res) => {
 
     res.json(suppliers);
   } catch (error) {
-    console.error("Failed to load suppliers:", error.message);
-
+    console.error("Failed to load suppliers:", error);
     res.status(500).json({
-      message: "Failed to load suppliers",
+      message: "Failed to load suppliers.",
     });
   }
 });
 
+
+/* ADD SUPPLIER */
+app.post("/api/Supplier", authenticateToken, async (req, res) => {
+  try {
+    const supplierName =
+      req.body.supplierName ?? req.body.SupplierName;
+
+    if (typeof supplierName !== "string" || !supplierName.trim()) {
+      return res.status(400).json({
+        message: "Supplier name is required.",
+      });
+    }
+
+    const supplier = await prisma.supplier.create({
+      data: {
+        SupplierName: supplierName.trim(),
+        ContactNumber:
+          (req.body.contactNumber ?? req.body.ContactNumber)?.trim() || null,
+        Email:
+          (req.body.email ?? req.body.Email)?.trim() || null,
+        Address:
+          (req.body.address ?? req.body.Address)?.trim() || null,
+        IsActive: true,
+      },
+    });
+
+    return res.status(201).json(supplier);
+  } catch (error) {
+    console.error("Failed to add supplier:", error);
+    return res.status(500).json({
+      message: "Failed to add supplier.",
+    });
+  }
+});
+
+
+/* UPDATE SUPPLIER */
+app.put("/api/Supplier/:id", authenticateToken, async (req, res) => {
+  try {
+    const supplierId = Number(req.params.id);
+    const supplierName =
+      req.body.supplierName ?? req.body.SupplierName;
+
+    if (!Number.isInteger(supplierId) || supplierId <= 0) {
+      return res.status(400).json({
+        message: "Invalid supplier ID.",
+      });
+    }
+
+    if (typeof supplierName !== "string" || !supplierName.trim()) {
+      return res.status(400).json({
+        message: "Supplier name is required.",
+      });
+    }
+
+    const updatedSupplier = await prisma.supplier.update({
+      where: { SupplierId: supplierId },
+      data: {
+        SupplierName: supplierName.trim(),
+        ContactNumber:
+          (req.body.contactNumber ?? req.body.ContactNumber)?.trim() || null,
+        Email:
+          (req.body.email ?? req.body.Email)?.trim() || null,
+        Address:
+          (req.body.address ?? req.body.Address)?.trim() || null,
+      },
+    });
+
+    return res.json(updatedSupplier);
+  } catch (error) {
+    console.error("Failed to update supplier:", error);
+
+    if (error.code === "P2025") {
+      return res.status(404).json({
+        message: "Supplier not found.",
+      });
+    }
+
+    return res.status(500).json({
+      message: "Failed to update supplier.",
+    });
+  }
+});
+
+
+/* ACTIVATE / DEACTIVATE SUPPLIER */
+app.patch(
+  "/api/Supplier/:id/status",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const supplierId = Number(req.params.id);
+      const isActive = req.body.isActive ?? req.body.IsActive;
+
+      if (!Number.isInteger(supplierId) || supplierId <= 0) {
+        return res.status(400).json({
+          message: "Invalid supplier ID.",
+        });
+      }
+
+      if (typeof isActive !== "boolean") {
+        return res.status(400).json({
+          message: "isActive must be true or false.",
+        });
+      }
+
+      const supplier = await prisma.supplier.update({
+        where: { SupplierId: supplierId },
+        data: { IsActive: isActive },
+      });
+
+      return res.json({
+        message: isActive
+          ? "Supplier activated successfully."
+          : "Supplier deactivated successfully.",
+        supplier,
+      });
+    } catch (error) {
+      console.error("Failed to change supplier status:", error);
+
+      if (error.code === "P2025") {
+        return res.status(404).json({
+          message: "Supplier not found.",
+        });
+      }
+
+      return res.status(500).json({
+        message: "Failed to change supplier status.",
+      });
+    }
+  }
+);
+
+
+/* DELETE SUPPLIER */
+app.delete("/api/Supplier/:id", authenticateToken, async (req, res) => {
+  try {
+    const supplierId = Number(req.params.id);
+
+    if (!Number.isInteger(supplierId) || supplierId <= 0) {
+      return res.status(400).json({
+        message: "Invalid supplier ID.",
+      });
+    }
+
+    const supplier = await prisma.supplier.findUnique({
+      where: { SupplierId: supplierId },
+    });
+
+    if (!supplier) {
+      return res.status(404).json({
+        message: "Supplier not found.",
+      });
+    }
+
+    const existingBatch = await prisma.medicineBatch.findFirst({
+      where: { SupplierId: supplierId },
+    });
+
+    if (existingBatch) {
+      return res.status(409).json({
+        message:
+          "This supplier is linked to stock batches. Deactivate the supplier instead of deleting it.",
+      });
+    }
+
+    await prisma.supplier.delete({
+      where: { SupplierId: supplierId },
+    });
+
+    return res.json({
+      message: "Supplier deleted successfully.",
+    });
+  } catch (error) {
+    console.error("Failed to delete supplier:", error);
+
+    if (error.code === "P2003") {
+      return res.status(409).json({
+        message:
+          "This supplier is linked to existing records and cannot be deleted.",
+      });
+    }
+
+    return res.status(500).json({
+      message: "Failed to delete supplier.",
+    });
+  }
+});
 
 
 app.get("/api/OtherItem", authenticateToken, async (req, res) => {
@@ -634,6 +1231,219 @@ app.get("/api/OtherItem", authenticateToken, async (req, res) => {
   }
 });
 
+
+app.post("/api/OtherItem", authenticateToken, async (req, res) => {
+  try {
+    const {
+      ItemName,
+      Category,
+      Unit,
+      PurchasePrice,
+      SellingPrice,
+      Quantity,
+      ReorderLevel,
+      Status,
+      ProductCategoryId,
+    } = req.body;
+
+    if (!ItemName?.trim()) {
+      return res.status(400).json({
+        message: "Item name is required.",
+      });
+    }
+
+    const purchasePrice = Number(PurchasePrice);
+    const sellingPrice = Number(SellingPrice);
+    const quantity = Number(Quantity);
+    const reorderLevel = Number(ReorderLevel);
+
+    if (
+      !Number.isFinite(purchasePrice) ||
+      purchasePrice < 0 ||
+      !Number.isFinite(sellingPrice) ||
+      sellingPrice < 0 ||
+      !Number.isInteger(quantity) ||
+      quantity < 0 ||
+      !Number.isInteger(reorderLevel) ||
+      reorderLevel < 0
+    ) {
+      return res.status(400).json({
+        message: "Please enter valid prices and quantities.",
+      });
+    }
+
+    const item = await prisma.otherItem.create({
+      data: {
+        ItemName: ItemName.trim(),
+        Category: Category || null,
+        Unit: Unit || null,
+        PurchasePrice: purchasePrice,
+        SellingPrice: sellingPrice,
+        Quantity: quantity,
+        ReorderLevel: reorderLevel,
+        Status: Status ?? true,
+        ProductCategoryId:
+          ProductCategoryId === "" ||
+          ProductCategoryId === null ||
+          ProductCategoryId === undefined
+            ? null
+            : Number(ProductCategoryId),
+      },
+      include: {
+        ProductCategory: true,
+      },
+    });
+
+    return res.status(201).json(item);
+  } catch (error) {
+    console.error("Failed to create other item:", error);
+
+    return res.status(500).json({
+      message: "Failed to save other item.",
+    });
+  }
+});
+
+
+app.put("/api/OtherItem/:id", authenticateToken, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ message: "Invalid item ID." });
+    }
+
+    const existing = await prisma.otherItem.findUnique({
+      where: { OtherItemId: id },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ message: "Other item not found." });
+    }
+
+    const {
+      ItemName,
+      Category,
+      Unit,
+      PurchasePrice,
+      SellingPrice,
+      Quantity,
+      ReorderLevel,
+      Status,
+      ProductCategoryId,
+    } = req.body;
+
+    const data = {};
+
+    if (ItemName !== undefined) {
+      if (typeof ItemName !== "string" || !ItemName.trim()) {
+        return res.status(400).json({
+          message: "Item name is required.",
+        });
+      }
+      data.ItemName = ItemName.trim();
+    }
+
+    if (Category !== undefined) data.Category = Category || null;
+    if (Unit !== undefined) data.Unit = Unit || null;
+
+    if (PurchasePrice !== undefined) {
+      const value = Number(PurchasePrice);
+      if (!Number.isFinite(value) || value < 0) {
+        return res.status(400).json({
+          message: "Invalid purchase price.",
+        });
+      }
+      data.PurchasePrice = value;
+    }
+
+    if (SellingPrice !== undefined) {
+      const value = Number(SellingPrice);
+      if (!Number.isFinite(value) || value < 0) {
+        return res.status(400).json({
+          message: "Invalid selling price.",
+        });
+      }
+      data.SellingPrice = value;
+    }
+
+    if (Quantity !== undefined) {
+      const value = Number(Quantity);
+      if (!Number.isInteger(value) || value < 0) {
+        return res.status(400).json({
+          message: "Invalid quantity.",
+        });
+      }
+      data.Quantity = value;
+    }
+
+    if (ReorderLevel !== undefined) {
+      const value = Number(ReorderLevel);
+      if (!Number.isInteger(value) || value < 0) {
+        return res.status(400).json({
+          message: "Invalid reorder level.",
+        });
+      }
+      data.ReorderLevel = value;
+    }
+
+    if (Status !== undefined) data.Status = Status;
+
+    if (ProductCategoryId !== undefined) {
+      data.ProductCategoryId =
+        ProductCategoryId === "" || ProductCategoryId === null
+          ? null
+          : Number(ProductCategoryId);
+    }
+
+    const updated = await prisma.otherItem.update({
+      where: { OtherItemId: id },
+      data,
+      include: {
+        ProductCategory: true,
+      },
+    });
+
+    return res.json(updated);
+  } catch (error) {
+    console.error("Failed to update other item:", error);
+
+    return res.status(500).json({
+      message: "Failed to update other item.",
+    });
+  }
+});
+
+
+app.delete("/api/OtherItem/:id", authenticateToken, async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ message: "Invalid item ID." });
+    }
+
+    const existing = await prisma.otherItem.findUnique({
+      where: { OtherItemId: id },
+    });
+
+    if (!existing) {
+      return res.status(404).json({ message: "Other item not found." });
+    }
+
+    await prisma.otherItem.delete({
+      where: { OtherItemId: id },
+    });
+
+    return res.json({ message: "Other item deleted successfully." });
+  } catch (error) {
+    console.error("Failed to delete other item:", error);
+
+    return res.status(500).json({
+      message: "Failed to delete other item. It may be referenced by other records.",
+    });
+  }
+});
 
 
 app.get("/api/ProductCategory", authenticateToken, async (req, res) => {
@@ -926,6 +1736,324 @@ app.get("/api/User", authenticateToken, requireAdmin, async (req, res) => {
   }
 });
 
+function hashAspNetPassword(password) {
+  const salt = crypto.randomBytes(16);
+  const iterations = 100000;
+
+  const subkey = crypto.pbkdf2Sync(
+    password,
+    salt,
+    iterations,
+    32,
+    "sha512"
+  );
+
+  const header = Buffer.alloc(13);
+  header[0] = 0x01;
+  header.writeUInt32BE(2, 1);
+  header.writeUInt32BE(iterations, 5);
+  header.writeUInt32BE(salt.length, 9);
+
+  return Buffer.concat([header, salt, subkey]).toString("base64");
+}
+
+/* ADD USER */
+app.post(
+  "/api/User",
+  authenticateToken,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const Name = req.body?.Name ?? req.body?.name;
+const UserName = req.body?.UserName ?? req.body?.userName;
+const Email = req.body?.Email ?? req.body?.email;
+const Password = req.body?.Password ?? req.body?.password;
+const RoleId = req.body?.RoleId ?? req.body?.roleId;
+const Status = req.body?.Status ?? req.body?.status;
+
+      if (
+        typeof Name !== "string" ||
+        !Name.trim() ||
+        typeof UserName !== "string" ||
+        !UserName.trim() ||
+        typeof Password !== "string" ||
+        !Password ||
+        RoleId == null
+      ) {
+        return res.status(400).json({
+          message: "Name, username, password and role are required.",
+        });
+      }
+
+      if (Password.length < 6) {
+        return res.status(400).json({
+          message: "Password must be at least 6 characters.",
+        });
+      }
+
+      const roleId = Number(RoleId);
+
+      if (!Number.isInteger(roleId) || roleId < 1) {
+        return res.status(400).json({
+          message: "Please select a valid role.",
+        });
+      }
+
+      const existingUser = await prisma.user.findUnique({
+        where: { UserName: UserName.trim() },
+      });
+
+      if (existingUser) {
+        return res.status(409).json({
+          message: "This username is already in use.",
+        });
+      }
+
+      const role = await prisma.role.findUnique({
+        where: { RoleId: roleId },
+      });
+
+      if (!role) {
+        return res.status(400).json({
+          message: "Selected role does not exist.",
+        });
+      }
+
+      // Use the existing ASP.NET Core Identity password hasher.
+      // PasswordHasher must be defined/imported in your backend.
+      const passwordHash = hashAspNetPassword(Password);
+
+      const user = await prisma.user.create({
+        data: {
+          Name: Name.trim(),
+          UserName: UserName.trim(),
+          Email:
+            typeof Email === "string" && Email.trim()
+              ? Email.trim().toLowerCase()
+              : null,
+          Password: passwordHash,
+          RoleId: roleId,
+          Status: Status === undefined ? true : Boolean(Status),
+        },
+        select: {
+          UserId: true,
+          Name: true,
+          UserName: true,
+          Email: true,
+          RoleId: true,
+          Status: true,
+        },
+      });
+
+      return res.status(201).json({
+        message: "User created successfully.",
+        user,
+      });
+    } catch (error) {
+      console.error("Failed to create user:", error);
+
+      if (error.code === "P2002") {
+        return res.status(409).json({
+          message: "This username is already in use.",
+        });
+      }
+
+      return res.status(500).json({
+        message: "Failed to create user.",
+      });
+    }
+  }
+);
+
+
+/* UPDATE USER */
+app.put(
+  "/api/User/:id",
+  authenticateToken,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const userId = Number(req.params.id);
+
+      if (!Number.isInteger(userId) || userId < 1) {
+        return res.status(400).json({
+          message: "Invalid user ID.",
+        });
+      }
+
+      const existingUser = await prisma.user.findUnique({
+        where: { UserId: userId },
+      });
+
+      if (!existingUser) {
+        return res.status(404).json({
+          message: "User not found.",
+        });
+      }
+
+      const Name = req.body?.Name ?? req.body?.name;
+const UserName = req.body?.UserName ?? req.body?.userName;
+const Email = req.body?.Email ?? req.body?.email;
+const Password = req.body?.Password ?? req.body?.password;
+const RoleId = req.body?.RoleId ?? req.body?.roleId;
+const Status = req.body?.Status ?? req.body?.status;
+
+      if (
+        typeof Name !== "string" ||
+        !Name.trim() ||
+        typeof UserName !== "string" ||
+        !UserName.trim() ||
+        RoleId == null
+      ) {
+        return res.status(400).json({
+          message: "Name, username and role are required.",
+        });
+      }
+
+      const roleId = Number(RoleId);
+
+      if (!Number.isInteger(roleId) || roleId < 1) {
+        return res.status(400).json({
+          message: "Please select a valid role.",
+        });
+      }
+
+      const role = await prisma.role.findUnique({
+        where: { RoleId: roleId },
+      });
+
+      if (!role) {
+        return res.status(400).json({
+          message: "Selected role does not exist.",
+        });
+      }
+
+      const duplicateUser = await prisma.user.findFirst({
+        where: {
+          UserName: UserName.trim(),
+          NOT: { UserId: userId },
+        },
+      });
+
+      if (duplicateUser) {
+        return res.status(409).json({
+          message: "This username is already in use.",
+        });
+      }
+
+      const data = {
+        Name: Name.trim(),
+        UserName: UserName.trim(),
+        Email:
+          typeof Email === "string" && Email.trim()
+            ? Email.trim().toLowerCase()
+            : null,
+        RoleId: roleId,
+      };
+
+      if (Status !== undefined) {
+        data.Status = Boolean(Status);
+      }
+
+      if (typeof Password === "string" && Password.length > 0) {
+        if (Password.length < 6) {
+          return res.status(400).json({
+            message: "Password must be at least 6 characters.",
+          });
+        }
+
+        data.Password = hashAspNetPassword(Password);
+      }
+
+      const user = await prisma.user.update({
+        where: { UserId: userId },
+        data,
+        select: {
+          UserId: true,
+          Name: true,
+          UserName: true,
+          Email: true,
+          RoleId: true,
+          Status: true,
+        },
+      });
+
+      return res.json({
+        message: "User updated successfully.",
+        user,
+      });
+    } catch (error) {
+      console.error("Failed to update user:", error);
+
+      if (error.code === "P2002") {
+        return res.status(409).json({
+          message: "This username is already in use.",
+        });
+      }
+
+      return res.status(500).json({
+        message: "Failed to update user.",
+      });
+    }
+  }
+);
+
+
+/* DELETE USER */
+app.delete(
+  "/api/User/:id",
+  authenticateToken,
+  requireAdmin,
+  async (req, res) => {
+    try {
+      const userId = Number(req.params.id);
+
+      if (!Number.isInteger(userId) || userId < 1) {
+        return res.status(400).json({
+          message: "Invalid user ID.",
+        });
+      }
+
+      if (Number(req.user.userId) === userId) {
+        return res.status(400).json({
+          message: "You cannot delete your own account while logged in.",
+        });
+      }
+
+      const existingUser = await prisma.user.findUnique({
+        where: { UserId: userId },
+      });
+
+      if (!existingUser) {
+        return res.status(404).json({
+          message: "User not found.",
+        });
+      }
+
+      await prisma.user.delete({
+        where: { UserId: userId },
+      });
+
+      return res.json({
+        message: "User deleted successfully.",
+      });
+    } catch (error) {
+      console.error("Failed to delete user:", error);
+
+      if (error.code === "P2003" || error.code === "P2014") {
+        return res.status(409).json({
+          message:
+            "This user cannot be deleted because related records exist. Deactivate the account instead.",
+        });
+      }
+
+      return res.status(500).json({
+        message: "Failed to delete user.",
+      });
+    }
+  }
+);
+
 
 function verifyAspNetPassword(password, storedHash) {
   try {
@@ -997,6 +2125,7 @@ function verifyAspNetPassword(password, storedHash) {
 app.get("/api/test-route", (req, res) => {
   res.json({ message: "Test route works" });
 });
+
 app.post("/api/User/login", async (req, res) => {
   console.log("LOGIN REQUEST RECEIVED");
   try {
@@ -1253,6 +2382,406 @@ app.delete("/api/SupportRequests/:id", authenticateToken, requireSalesAndSupport
   }
 });
 
-app.listen(PORT, () => {
+
+app.get("/api/SaleItem", authenticateToken, async (req, res) => {
+  try {
+    const saleItems = await prisma.saleItem.findMany({
+      include: {
+        MedicineBatch: true,
+      },
+      orderBy: {
+        SaleItemId: "desc",
+      },
+    });
+
+    return res.json(saleItems);
+  } catch (error) {
+    console.error("Failed to load sale items:", error);
+
+    return res.status(500).json({
+      message: "Failed to load sale items",
+    });
+  }
+});
+// GET: Load all support requests
+app.get("/api/SupportRequest", authenticateToken, async (req, res) => {
+  try {
+    const requests = await prisma.supportRequests.findMany({
+      orderBy: {
+        RequestId: "desc",
+      },
+    });
+
+    res.json(requests);
+  } catch (error) {
+    console.error("Error loading support requests:", error);
+
+    res.status(500).json({
+      message: "Failed to load support requests",
+      error: error.message,
+    });
+  }
+});
+
+
+/* UPDATE SUPPORT REQUEST STATUS */
+app.put(
+  "/api/SupportRequest/:id/status",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({
+          message: "Invalid support request ID.",
+        });
+      }
+
+      const status =
+        typeof req.body === "string"
+          ? req.body
+          : req.body?.status ?? req.body?.Status;
+
+      const allowedStatuses = [
+        "Pending",
+        "In Progress",
+        "Resolved",
+      ];
+
+      if (!allowedStatuses.includes(status)) {
+        return res.status(400).json({
+          message: "Invalid status.",
+        });
+      }
+
+      const request = await prisma.supportRequests.findUnique({
+        where: { RequestId: id },
+      });
+
+      if (!request) {
+        return res.status(404).json({
+          message: "Support request not found.",
+        });
+      }
+
+      const updatedRequest = await prisma.supportRequests.update({
+        where: { RequestId: id },
+        data: {
+          Status: status,
+          ResolvedAt:
+            status === "Resolved" ? new Date() : null,
+        },
+      });
+
+      return res.json(updatedRequest);
+    } catch (error) {
+      console.error("Error updating support request:", error);
+
+      return res.status(500).json({
+        message: "Failed to update support request status.",
+      });
+    }
+  }
+);
+
+
+app.post("/api/SupportRequest", async (req, res) => {
+  try {
+    const { userId, requestType, message } = req.body;
+
+    if (!userId || !requestType || !message?.trim()) {
+      return res.status(400).json({
+        message: "User ID, request type and message are required.",
+      });
+    }
+
+    const request = await prisma.supportRequests.create({
+      data: {
+        UserId: Number(userId),
+        RequestType: requestType,
+        Message: message.trim(),
+        Status: "Pending",
+        CreatedAt: new Date(),
+      },
+    });
+
+    return res.status(201).json({
+      message: "Support request submitted successfully.",
+      request,
+    });
+  } catch (error) {
+    console.error("Support request error:", error);
+
+    return res.status(500).json({
+      message: "Failed to submit support request.",
+    });
+  }
+});
+
+
+/* DELETE SUPPORT REQUEST */
+app.delete(
+  "/api/SupportRequest/:id",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      const id = Number(req.params.id);
+
+      if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({
+          message: "Invalid support request ID.",
+        });
+      }
+
+      const request = await prisma.supportRequests.findUnique({
+        where: { RequestId: id },
+      });
+
+      if (!request) {
+        return res.status(404).json({
+          message: "Support request not found.",
+        });
+      }
+
+      await prisma.supportRequests.delete({
+        where: { RequestId: id },
+      });
+
+      return res.json({
+        message: "Support request deleted successfully.",
+      });
+    } catch (error) {
+      console.error("Error deleting support request:", error);
+
+      return res.status(500).json({
+        message: "Failed to delete support request.",
+      });
+    }
+  }
+);
+
+
+function createAspNetPasswordHash(password) {
+  const salt = crypto.randomBytes(16);
+  const iterations = 100000;
+  const subkey = crypto.pbkdf2Sync(
+    password,
+    salt,
+    iterations,
+    32,
+    "sha512"
+  );
+
+  const header = Buffer.alloc(13);
+  header[0] = 0x01;
+  header.writeUInt32BE(2, 1); // SHA512
+  header.writeUInt32BE(iterations, 5);
+  header.writeUInt32BE(salt.length, 9);
+
+  return Buffer.concat([header, salt, subkey]).toString("base64");
+}
+
+const resetMailer = nodemailer.createTransport({
+  host: process.env.SMTP_HOST,
+  port: Number(process.env.SMTP_PORT || 587),
+  secure: Number(process.env.SMTP_PORT) === 465,
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  },
+});
+
+app.post("/api/PasswordReset/forgot", async (req, res) => {
+  try {
+    const email =
+      typeof req.body?.email === "string"
+        ? req.body.email.trim()
+        : "";
+
+    if (!email) {
+      return res.status(400).json({
+        message: "Email address eka enter karanna.",
+      });
+    }
+
+    const genericMessage =
+      "Email eka account ekakata sambandha nam reset link ekak yawanu atha.";
+
+    const user = await prisma.user.findFirst({
+      where: {
+        Email: {
+          equals: email,
+          mode: "insensitive",
+        },
+        Status: true,
+      },
+    });
+
+    if (!user) {
+      return res.json({ message: genericMessage });
+    }
+
+    const rawToken = crypto.randomBytes(32).toString("hex");
+    const tokenHash = crypto
+      .createHash("sha256")
+      .update(rawToken)
+      .digest("hex");
+
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 15 * 60 * 1000);
+
+    await prisma.passwordResetToken.updateMany({
+      where: {
+        UserId: user.UserId,
+        UsedAt: null,
+      },
+      data: {
+        UsedAt: now,
+      },
+    });
+
+    await prisma.passwordResetToken.create({
+      data: {
+        UserId: user.UserId,
+        TokenHash: tokenHash,
+        CreatedAt: now,
+        ExpiresAt: expiresAt,
+      },
+    });
+
+    const frontendUrl = (
+      process.env.FRONTEND_URL || "http://localhost:5173"
+    ).replace(/\/+$/, "");
+
+    const resetLink =
+      `${frontendUrl}/reset-password?token=${rawToken}`;
+
+    try {
+      await resetMailer.sendMail({
+        from: process.env.SMTP_FROM || process.env.SMTP_USER,
+        to: user.Email,
+        subject: "PharmaTrack Password Reset",
+        text:
+          `Password eka reset karanna me link eka open karanna:\n\n` +
+          `${resetLink}\n\n` +
+          `Me link eka minutes 15kin expire wenawa. Oya request kale nathnam me email eka ignore karanna.`,
+      });
+    } catch (mailError) {
+      console.error("Password reset email failed:", mailError.message);
+
+      await prisma.passwordResetToken.updateMany({
+        where: {
+          TokenHash: tokenHash,
+          UsedAt: null,
+        },
+        data: {
+          UsedAt: new Date(),
+        },
+      });
+
+      return res.status(500).json({
+        message: "Reset email eka yawanna bari una. SMTP settings check karanna.",
+      });
+    }
+
+    return res.json({ message: genericMessage });
+  } catch (error) {
+    console.error("Forgot password failed:", error.message);
+
+    return res.status(500).json({
+      message: "Password reset request eka process karanna bari una.",
+    });
+  }
+});
+
+app.post("/api/PasswordReset/reset", async (req, res) => {
+  try {
+    const { token, newPassword } = req.body || {};
+
+    if (
+      typeof token !== "string" ||
+      !/^[a-f0-9]{64}$/i.test(token) ||
+      typeof newPassword !== "string" ||
+      newPassword.length < 8 ||
+      newPassword.length > 128
+    ) {
+      return res.status(400).json({
+        message: "Valid reset token ekak saha 8-128 characters password ekak denna.",
+      });
+    }
+
+    const tokenHash = crypto
+      .createHash("sha256")
+      .update(token)
+      .digest("hex");
+
+    const now = new Date();
+
+    const resetRecord = await prisma.passwordResetToken.findFirst({
+      where: {
+        TokenHash: tokenHash,
+        UsedAt: null,
+        ExpiresAt: { gt: now },
+        User: { Status: true },
+      },
+    });
+
+    if (!resetRecord) {
+      return res.status(400).json({
+        message: "Reset link eka invalid, used, nathnam expire wela.",
+      });
+    }
+
+    const passwordHash = createAspNetPasswordHash(newPassword);
+
+    await prisma.$transaction(async (tx) => {
+      const consumed = await tx.passwordResetToken.updateMany({
+        where: {
+          PasswordResetTokenId: resetRecord.PasswordResetTokenId,
+          UsedAt: null,
+          ExpiresAt: { gt: new Date() },
+        },
+        data: { UsedAt: new Date() },
+      });
+
+      if (consumed.count !== 1) {
+        throw new Error("RESET_TOKEN_ALREADY_USED");
+      }
+
+      await tx.user.update({
+        where: { UserId: resetRecord.UserId },
+        data: { Password: passwordHash },
+      });
+    });
+
+    return res.json({
+      message: "Password reset una. Dan aluth password eken login wenna.",
+    });
+  } catch (error) {
+    if (error.message === "RESET_TOKEN_ALREADY_USED") {
+      return res.status(400).json({
+        message: "Reset link eka use karala ho expire wela.",
+      });
+    }
+
+    console.error("Reset password failed:", error.message);
+
+    return res.status(500).json({
+      message: "Password reset karanna bari una.",
+    });
+  }
+});
+
+
+const server = app.listen(PORT, () => {
   console.log(`PharmaTrack Node API running at http://localhost:${PORT}`);
+});
+
+server.on("close", () => {
+  console.log("HTTP server has closed.");
+});
+
+server.on("error", (error) => {
+  console.error("HTTP server error:", error);
 });

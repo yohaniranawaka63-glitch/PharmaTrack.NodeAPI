@@ -1,4 +1,3 @@
-
 {
   "name": "pharmatrack.nodeapi",
   "version": "1.0.0",
@@ -19,7 +18,8 @@
     "cors": "^2.8.6",
     "dotenv": "^18.0.7",
     "express": "^5.3.0",
-    "jsonwebtoken": "^9.0.3"
+    "jsonwebtoken": "^9.0.3",
+    "nodemailer": "^10.2.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.14",

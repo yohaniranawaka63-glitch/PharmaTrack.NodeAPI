@@ -129,6 +129,7 @@ model Supplier {
   ContactNumber String?         @db.VarChar(20)
   Email         String?         @db.VarChar(100)
   Address       String?         @db.VarChar(255)
+  IsActive      Boolean         @default(true)
   MedicineBatch MedicineBatch[]
 }
 
